@@ -6,6 +6,7 @@ import env, { parseOrigins } from './lib/config.js';
 import { logger } from './lib/logger.js';
 import { tasksRouter } from './routes/tasks.js';
 import { healthRouter } from './routes/health.js';
+import { systemRouter } from './routes/system.js';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler.js';
 
 const origins = parseOrigins(env.FRONTEND_ORIGIN);
@@ -66,6 +67,7 @@ export function createApp(): Express {
 
   app.use(healthRouter);
   app.use(tasksRouter);
+  app.use(systemRouter);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

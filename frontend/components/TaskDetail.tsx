@@ -28,9 +28,18 @@ export function TaskDetail({ task, busy, onCancel, onRetry, onDelete }: TaskDeta
         <h3 className="detail-prompt">{task.prompt}</h3>
         <div className="detail-meta">
           <span className={`status status-${task.status}`}>{task.status}</span>
+          {task.provider_used && <span className="muted model-badge">{task.provider_used}</span>}
           {task.model_used && <span className="muted model-badge">{task.model_used}</span>}
         </div>
       </div>
+
+      {(task.model_mode || task.fallback_used) && (
+        <div className="run-meta muted">
+          {task.model_mode && <span>mode: {task.model_mode}</span>}
+          {task.model && <span>override: {task.model}</span>}
+          {task.fallback_used !== null && <span>{task.fallback_used ? 'fallback used' : 'primary used'}</span>}
+        </div>
+      )}
 
       {active && <TaskProgress currentStep={task.current_step} />}
 

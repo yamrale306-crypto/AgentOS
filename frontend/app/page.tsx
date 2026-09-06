@@ -6,12 +6,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Session, SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseBrowser } from '@/lib/supabase';
 import { createApi, ApiError, type ApiClient } from '@/lib/api';
-import { isActiveStatus, type Task, type TaskListItem } from '@/lib/types';
+import { isActiveStatus, type ModelMode, type Task, type TaskListItem } from '@/lib/types';
 import { Header } from '@/components/Header';
 import { AuthForm, type AuthMode } from '@/components/AuthForm';
 import { TaskComposer } from '@/components/TaskComposer';
 import { TaskList } from '@/components/TaskList';
 import { TaskDetail } from '@/components/TaskDetail';
+import { SystemDashboard } from '@/components/SystemDashboard';
 import { ErrorState } from '@/components/ErrorState';
 
 function errorMessage(e: unknown): string {
@@ -32,6 +33,7 @@ export default function Home() {
   const [banner, setBanner] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
+  const [showSystem, setShowSystem] = useState(false);
 
   const selectedIdRef = useRef<string | null>(null);
   selectedIdRef.current = selectedId;
@@ -110,12 +112,12 @@ export default function Home() {
   );
 
   const submitPrompt = useCallback(
-    async (prompt: string) => {
+    async (prompt: string, options: { mode: ModelMode; model: string | null }) => {
       if (!api) return;
       setBanner(null);
       setBusy(true);
       try {
-        const created = await api.createTask(prompt);
+        const created = await api.createTask(prompt, options);
         selectedIdRef.current = created.id;
         setSelectedId(created.id);
         setSelected(await api.getTask(created.id));
@@ -226,6 +228,19 @@ export default function Home() {
         <p className="muted">Describe the outcome. The agent figures out the research steps.</p>
         <TaskComposer onSubmit={submitPrompt} />
       </section>
+
+      <div className="actions sys-toggle">
+        <button className="btn secondary" onClick={() => setShowSystem((v) => !v)} aria-expanded={showSystem}>
+          {showSystem ? 'Hide' : 'Show'} System &amp; API
+        </button>
+      </div>
+
+      {showSystem && (
+        <section className="card sys-card">
+          <h2>System &amp; API</h2>
+          {api && <SystemDashboard api={api} onError={setBanner} />}
+        </section>
+      )}
 
       <div className="grid">
         <section className="card">

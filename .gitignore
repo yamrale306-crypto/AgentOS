@@ -26,6 +26,9 @@ __pycache__/
 # Local development credential files (may contain real API keys).
 Dev Keys.txt
 Dev\ Keys.txt
+# ---------- SECRETS — never commit ----------
+# Local development credential file. NEVER commit or move into the repo.
+Dev Keys.txt
 dev-keys*.txt
 *.secret
 *.secret.*
@@ -42,3 +45,4 @@ id_ed25519
 # !new-update/README.md
 # !new-update/UPDATE_MANIFEST.md
 # !new-update/update_tool.py
+credentials.json

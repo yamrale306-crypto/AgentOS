@@ -28,6 +28,9 @@ export interface SearchResult {
   snippet: string;
 }
 
+export const AI_MODES = ['auto', 'quality', 'balanced', 'fast', 'lowcost'] as const;
+export type AiMode = (typeof AI_MODES)[number];
+
 export interface ResearchPlan {
   goal: string;
   steps: string[];
@@ -69,6 +72,10 @@ export interface TaskRecord {
   steps_used: number;
   searches_used: number;
   model_used: string | null;
+  model_mode: AiMode | null;
+  model: string | null;
+  provider_used: string | null;
+  fallback_used: boolean | null;
   sources: SearchResult[];
   created_at: string;
   updated_at: string;
@@ -83,6 +90,8 @@ export interface TaskListItem {
   steps_used: number;
   searches_used: number;
   model_used: string | null;
+  provider_used: string | null;
+  model_mode: AiMode | null;
   created_at: string;
   completed_at: string | null;
 }

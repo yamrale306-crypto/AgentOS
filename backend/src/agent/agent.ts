@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import env from '../lib/config.js';
 import { logger } from '../lib/logger.js';
 import { chatWithFallback, structuredWithFallback } from './model.js';
+import type { AiMode } from '../ai/router.js';
 import { planSchema, verificationSchema, webSearchArgsSchema, DEFAULT_PLAN, DEFAULT_VERIFICATION } from './schemas.js';
 import { SYSTEM_PROMPT, PLAN_PROMPT, VERIFY_PROMPT, SYNTHESIS_PROMPT } from './prompts.js';
 import { webSearch, isProbablyRateLimited, type SearchResult } from '../tools/webSearch.js';
@@ -10,6 +11,13 @@ import { getTaskByAdminId, transition, markFailed, incrementSearchUsage } from '
 import { ACTIVE_STATUSES, type TaskStatus } from '../types.js';
 
 type TaskRow = Record<string, unknown>;
+
+const AI_MODES = ['auto', 'quality', 'balanced', 'fast', 'lowcost'];
+
+function validMode(value: unknown): AiMode {
+  const mode = typeof value === 'string' ? value : 'auto';
+  return (AI_MODES as string[]).includes(mode) ? (mode as AiMode) : 'auto';
+}
 
 const webSearchTool: OpenAI.Chat.Completions.ChatCompletionTool = {
   type: 'function',
@@ -68,9 +76,16 @@ export async function runTask(taskId: string): Promise<void> {
 
   const userId = str(task.user_id);
   const prompt = str(task.prompt);
+  const modelMode = validMode(task.model_mode);
+  const modelOverride = str(task.model) || null;
   let steps = 1;
   let searchesUsedTask = num(task.searches_used);
   let sources: SearchResult[] = Array.isArray(task.sources) ? (task.sources as SearchResult[]) : [];
+  let lastProvider = '';
+  let lastModel = '';
+  let anyFallback = false;
+
+  const routeOpts = { mode: modelMode, override: modelOverride, prompt };
 
   try {
     await assertRunning(taskId);
@@ -88,11 +103,15 @@ export async function runTask(taskId: string): Promise<void> {
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: `${PLAN_PROMPT}\n${prompt}` }
       ],
-      { ...DEFAULT_PLAN, goal: prompt || DEFAULT_PLAN.goal }
+      { ...DEFAULT_PLAN, goal: prompt || DEFAULT_PLAN.goal },
+      { stage: 'planning', ...routeOpts }
     );
     if (!planned.ok) logger.warn('plan_parse_failed', { task_id: taskId });
     const plan = planned.value;
-    await transition(taskId, ['planning'], { plan, model_used: planned.model, steps_used: steps });
+    lastProvider = planned.provider;
+    lastModel = planned.model;
+    anyFallback = anyFallback || planned.fallback;
+    await transition(taskId, ['planning'], { plan, model_used: planned.model, model_mode: modelMode, model: modelOverride, steps_used: steps });
 
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       { role: 'system', content: SYSTEM_PROMPT },
@@ -101,7 +120,6 @@ export async function runTask(taskId: string): Promise<void> {
     ];
 
     let draft = '';
-    let lastModel = planned.model;
 
     for (let i = 0; i < env.MAX_STEPS; i++) {
       await assertRunning(taskId);
@@ -117,8 +135,10 @@ export async function runTask(taskId: string): Promise<void> {
       });
 
       await assertRunning(taskId);
-      const step = await chatWithFallback(messages, [webSearchTool]);
+      const step = await chatWithFallback(messages, [webSearchTool], { stage: 'research', ...routeOpts });
+      lastProvider = step.provider;
       lastModel = step.model;
+      anyFallback = anyFallback || step.fallback;
       steps += 1;
       await transition(taskId, ACTIVE_STATUSES, {
         model_used: lastModel,
@@ -188,13 +208,19 @@ export async function runTask(taskId: string): Promise<void> {
 
     if (!draft) {
       await assertRunning(taskId);
-      const synthesis = await chatWithFallback([
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'assistant', content: `User goal:\n${prompt}` },
-        { role: 'assistant', content: `${SYNTHESIS_PROMPT}\n${prompt}` },
-        ...messages
-      ]);
+      const synthesis = await chatWithFallback(
+        [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'assistant', content: `User goal:\n${prompt}` },
+          { role: 'assistant', content: `${SYNTHESIS_PROMPT}\n${prompt}` },
+          ...messages
+        ],
+        undefined,
+        { stage: 'synthesis', ...routeOpts }
+      );
+      lastProvider = synthesis.provider;
       lastModel = synthesis.model;
+      anyFallback = anyFallback || synthesis.fallback;
       draft = synthesis.response.choices[0]?.message?.content ?? 'The agent could not produce a final answer.';
       steps += 1;
     }
@@ -213,10 +239,13 @@ export async function runTask(taskId: string): Promise<void> {
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: `User goal:\n${prompt}\n\nDraft answer:\n${draft}\n\n${VERIFY_PROMPT}` }
       ],
-      DEFAULT_VERIFICATION
+      DEFAULT_VERIFICATION,
+      { stage: 'verifying', ...routeOpts }
     );
     if (!verification.ok) logger.warn('verification_parse_failed', { task_id: taskId });
+    lastProvider = verification.provider;
     lastModel = verification.model;
+    anyFallback = anyFallback || verification.fallback;
 
     const verifiedLabel = verification.value.complete ? 'yes' : 'partial';
     const missingLine = verification.value.missing ? `\n- Missing: ${verification.value.missing}` : '';
@@ -229,6 +258,8 @@ export async function runTask(taskId: string): Promise<void> {
       result,
       sources,
       model_used: lastModel,
+      provider_used: lastProvider || null,
+      fallback_used: anyFallback,
       steps_used: steps + 1,
       searches_used: searchesUsedTask,
       completed_at: new Date().toISOString()
@@ -236,7 +267,10 @@ export async function runTask(taskId: string): Promise<void> {
 
     logger.info('task_completed', {
       task_id: taskId,
+      provider: lastProvider || 'none',
       model: lastModel,
+      mode: modelMode,
+      fallback_used: anyFallback,
       steps: steps + 1,
       searches: searchesUsedTask,
       sources: sources.length

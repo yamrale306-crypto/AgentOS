@@ -150,6 +150,36 @@ describe('cancellation', () => {
   });
 });
 
+describe('system', () => {
+  it('requires authentication', async () => {
+    const res = await request(api).get('/api/system/status');
+    expect(res.status).toBe(401);
+  });
+
+  it('returns status, providers, models and tokens without leaking raw secrets', async () => {
+    const status = await request(api).get('/api/system/status').set(authed);
+    expect(status.status).toBe(200);
+    expect(status.body.data.routingEnabled).toBe(true);
+    expect(status.body.data.defaultMode).toBe('auto');
+
+    const providers = await request(api).get('/api/system/providers').set(authed);
+    expect(providers.status).toBe(200);
+
+    const models = await request(api).get('/api/system/models').set(authed);
+    expect(models.status).toBe(200);
+    expect(Array.isArray(models.body.data)).toBe(true);
+
+    const tokens = await request(api).get('/api/system/tokens').set(authed);
+    expect(tokens.status).toBe(200);
+    expect(JSON.stringify(tokens.body.data)).not.toContain('sk-test-key-not-a-real-secret');
+  });
+
+  it('rejects an invalid mode on the test endpoint', async () => {
+    const res = await request(api).post('/api/system/test').set(authed).send({ mode: 'ludicrous', model: 'test/primary-model' });
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('retry', () => {
   it('retries a failed task by creating a fresh run of the same prompt', async () => {
     vi.mocked(taskStore.getTask).mockResolvedValue({ id: 'old', prompt: 'Research X', status: 'failed' });
@@ -157,7 +187,7 @@ describe('retry', () => {
     const res = await request(api).post('/api/tasks/old/retry').set(authed);
     expect(res.status).toBe(202);
     expect(res.body.data.id).toBe('new-1');
-    expect(taskStore.createTask).toHaveBeenCalledWith('user-1', 'Research X', expect.any(Number), expect.any(Number));
+    expect(taskStore.createTask).toHaveBeenCalledWith('user-1', 'Research X', expect.any(Number), expect.any(Number), 'auto', null);
     expect(runTask).toHaveBeenCalledWith('new-1');
   });
 
