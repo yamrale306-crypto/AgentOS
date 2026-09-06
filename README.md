@@ -100,11 +100,11 @@ Frontend (`.env.local`):
 
 All endpoints are JSON. Success: `{ "ok": true, "data": ... }`. Errors: `{ "ok": false, "error": { "code", "message" } }`.
 
-Auth: `Authorization: Bearer <supabase-jwt>` (except `/api/health`).
+Auth: `Authorization: Bearer <supabase-jwt>` (except `/health`).
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/api/health` | Liveness + DB connectivity |
+| `GET` | `/health` | Liveness + DB connectivity |
 | `POST` | `/api/tasks` | Create a task (`{ prompt }`) → `202`; returns `{ id }` |
 | `GET` | `/api/tasks` | List the caller's tasks |
 | `GET` | `/api/tasks/:id` | Full task (plan, result, sources) |

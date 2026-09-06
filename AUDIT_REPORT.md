@@ -72,7 +72,7 @@ Bugs fixed during this audit pass: malformed model tool-call JSON no longer fail
 ## 6. Deployment Platform
 
 - `render.yaml` (declarative Blueprint): one Node web service each for backend and frontend.
-  - Backend: Node `NODE_VERSION: 20`, health check `healthCheckPath: /api/health` (so Render marks the instance healthy only when the API responds) — PASS.
+  - Backend: Node `NODE_VERSION: 20`, health check `healthCheckPath: /health` (so Render marks the instance healthy only when the API responds) — PASS.
   - Frontend: Next 15 requires Node ≥18 → `NODE_VERSION: 20` is compatible.
 - Local verification ran on Node v24.19.0; `package.json` `engines: >=20`. **Do not upgrade `openai` to v7** (requires Node 22; v6.49.0 pins the current behavior).
 - Render free tier: single instance; the scheduler is **in-process** (see §17/§28).
