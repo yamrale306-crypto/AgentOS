@@ -1,0 +1,6 @@
+{
+  "name": "AgentOS",
+  "description": "Autonomous web research agent: plans, searches the web, analyzes findings, and delivers verified answers with inspectable sources.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

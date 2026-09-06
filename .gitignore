@@ -11,3 +11,34 @@ dist/
 !.env.example
 *.log
 .DS_Store
+
+# Update staging area — never commit incoming code, backups, or extractions
+new-update/backups/
+new-update/extracted-code/
+# Transient plan files regenerate on every `plan`/`run`
+new-update/UPDATE_PLAN.json
+new-update/UPDATE_PLAN.md
+# Python bytecode from the update tool
+__pycache__/
+*.pyc
+
+# ---------- SECRETS — never commit ----------
+# Local development credential files (may contain real API keys).
+Dev Keys.txt
+Dev\ Keys.txt
+dev-keys*.txt
+*.secret
+*.secret.*
+*.key
+*.pem
+*.jwk
+*.jwt
+.env.production.local
+credentials.json
+id_rsa
+id_ed25519
+# Uncomment to also ignore everything handed in for review (keep README/MANIFEST):
+# new-update/*
+# !new-update/README.md
+# !new-update/UPDATE_MANIFEST.md
+# !new-update/update_tool.py
