@@ -7,9 +7,9 @@ export { validatePrompt };
 
 type JsonRecord = { [key: string]: unknown };
 
-const TASK_FIELDS = 'id,user_id,prompt,status,plan,current_step,result,error,steps_used,searches_used,model_used,sources,created_at,updated_at,completed_at';
+const TASK_FIELDS = 'id,user_id,prompt,status,plan,current_step,result,error,steps_used,searches_used,model_used,model_mode,model,provider_used,fallback_used,sources,created_at,updated_at,completed_at';
 
-const LIST_FIELDS = 'id,prompt,status,current_step,steps_used,searches_used,model_used,created_at,completed_at';
+const LIST_FIELDS = 'id,prompt,status,current_step,steps_used,searches_used,model_used,provider_used,model_mode,created_at,completed_at';
 
 function noRows(row: unknown): boolean {
   return row === undefined || row === null;
@@ -19,13 +19,17 @@ export async function createTask(
   userId: string,
   prompt: string,
   dailyLimit: number,
-  activeLimit: number
+  activeLimit: number,
+  modelMode = 'auto',
+  modelOverride: string | null = null
 ): Promise<{ ok: true; id: string; status: TaskStatus; created_at: string } | { ok: false; error: CreateTaskError }> {
   const { data, error } = await supabaseAdmin.rpc('create_task', {
     p_user: userId,
     p_prompt: prompt,
     p_max_daily: dailyLimit,
-    p_max_active: activeLimit
+    p_max_active: activeLimit,
+    p_mode: modelMode,
+    p_model: modelOverride
   });
   if (error) throw error;
   const result = data as JsonRecord;

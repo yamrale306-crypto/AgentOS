@@ -403,3 +403,44 @@ This pass re-ran every check **against the actual GitHub repository** (`git clon
 Hygiene: `frontend/tsconfig.tsbuildinfo` was tracked and dirtied the tree on every build â†’ untracked + added `*.tsbuildinfo` to `.gitignore`.
 
 Re-verified after the changes (all green): backend `typecheck` / `test` (97/97, 8 files) / `build`; frontend `tsc --noEmit` / `next build` (Next 15.5.25, `/` static 71 kB / 174 kB); `git diff --check` clean; live DuckDuckGo query through the shipping code path returned 5 decoded results in ~1.1 s; local runtime smoke test returned correct 200/401/403/404 envelopes. The 20-task live matrix and live Supabase/OpenRouter/Render/Vercel checks remain **MANUAL LIVE VALIDATION REQUIRED** (no credentials available â€” nothing faked).
+---
+
+## 33. Multi-Model AI Engine — Security Addendum (2026-09-06)
+
+Scope of this pass: the multi-provider AI engine added to V1 — ackend/src/ai/* (catalog, router, tokenManager, health, errors, diagnostics, registry, runtime, providers), ackend/src/agent/model.ts, ackend/src/routes/system.ts, ackend/scripts/*, and the System dashboard frontend.
+
+### Verification results (all executed this session)
+
+| Check | Result |
+|---|---|
+| Backend 
+pm run typecheck | PASS |
+| Backend 
+pm test | PASS — 131/131 across 9 files |
+| Backend 
+pm run build | PASS |
+| Frontend 
+pm run build (Next 15.5.25) | PASS — / static, 73.6 kB / 176 kB |
+| Live provider verification (erify:providers) | PASS — 11 PASS / 2 DEGRADED / 0 FAIL (deepseek-chat + deepseek-reasoner DEGRADED = 402 insufficient balance; recovered when topped up) |
+| Providers covered live | cloudflare, deepseek, gemini, groq, zai (OpenRouter dynamic discovery added 431 models) |
+| Secrets scan of tracked files | clean — only package-lock integrity hashes matched the high-entropy pattern |
+
+### Security review of the new surfaces
+
+1. **Secret hygiene** — PASS. Keys exist only in env (.env gitignored). API/dashboard/logs surface masked tokens (…a1B2). Logger redaction (already verified) masks key-shaped values in stack traces. Provider verification script prints provider IDs only.
+2. **No SSRF** — PASS. Provider/model inputs are scoped to the registry: unknown overrides resolve to 
+ull and fall back to normal routing (outer.resolveOverride). HTTP client base URLs come exclusively from config-bound providerManager, never from request input. The /api/system/playground provider field only filters catalog candidates.
+3. **Abuse/cost bounds** — PASS (hardened this session). Playground prompt capped at 4000 chars server-side; maxTokens clamped to 4096 in the diagnostic path and 8192 globally in chatWithFallback; 	imeoutMs clamped to 60000; /api/system/test uses a fixed 32-token probe; all /api/system/* routes are behind equireAuth and the global per-IP rate limiter.
+4. **Error taxonomy** — PASS. HTTP 402/410 map to MODEL_UNAVAILABLE (non-retryable) so permanent failures never hammer tokens; retryable categories drive the fallback chain only.
+5. **Dashboard exposure** — PASS. No endpoint returns raw credentials; frontend displays masked values and latency/health only.
+
+### Changes made this session
+- ackend/src/agent/model.ts — maxTokens capped at 8192 (shared fallback path).
+- ackend/src/ai/diagnostics.ts — diagnostic maxTokens/	imeoutMs bounds.
+- rontend/components/SystemDashboard.tsx + rontend/lib/api.ts — per-provider Test button and Playground section (diagnostic calls, no credentials shown).
+- rontend/lib/types.ts/pi.ts types extended for the diagnostics client.
+- rontend/app/globals.css — sys-test-btn, sys-test-result, sys-ok/-fail, sys-play-prompt.
+- Docs: new MULTI_MODEL.md; README.md model line, env table, API table, and security notes updated.
+
+### Residual risk (unchanged from V1, documented)
+Full live E2E (research task against 6 providers + Supabase quota/auth) remains **MANUAL LIVE VALIDATION REQUIRED** — the backend requires SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY, which were not available in this environment. Nothing was faked; provider-level behavior was verified with real API calls.

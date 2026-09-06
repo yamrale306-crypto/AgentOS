@@ -18,6 +18,10 @@ create table if not exists public.tasks (
   steps_used integer not null default 0,
   searches_used integer not null default 0,
   model_used text,
+  model_mode text default 'auto' check (model_mode in ('auto','quality','balanced','fast','lowcost')),
+  model text,
+  provider_used text,
+  fallback_used boolean not null default false,
   sources jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -26,6 +30,10 @@ create table if not exists public.tasks (
 
 alter table public.tasks add column if not exists sources jsonb not null default '[]'::jsonb;
 alter table public.tasks add column if not exists completed_at timestamptz;
+alter table public.tasks add column if not exists model_mode text default 'auto';
+alter table public.tasks add column if not exists model text;
+alter table public.tasks add column if not exists provider_used text;
+alter table public.tasks add column if not exists fallback_used boolean not null default false;
 
 create index if not exists tasks_user_created_idx on public.tasks(user_id, created_at desc);
 create index if not exists tasks_status_idx on public.tasks(status);
@@ -124,7 +132,7 @@ $$;
 -- task row. Returns {"id","status","created_at"} on success, or {"error":"daily_limit"}
 -- / {"error":"active_limit"}. The task row is inserted by this function so two
 -- concurrent requests cannot both pass the limit checks.
-create or replace function public.create_task(p_user uuid, p_prompt text, p_max_daily integer, p_max_active integer)
+create or replace function public.create_task(p_user uuid, p_prompt text, p_max_daily integer, p_max_active integer, p_mode text default 'auto', p_model text default null)
 returns jsonb
 language plpgsql security definer
 set search_path = public
@@ -157,17 +165,17 @@ begin
     return jsonb_build_object('error', 'active_limit');
   end if;
 
-  insert into public.tasks (user_id, prompt, status)
-  values (p_user, p_prompt, 'queued')
+  insert into public.tasks (user_id, prompt, status, model_mode, model)
+  values (p_user, p_prompt, 'queued', p_mode, p_model)
   returning id, status, created_at into v_id, v_status, v_created_at;
 
   return jsonb_build_object('id', v_id, 'status', v_status, 'created_at', v_created_at);
 end;
 $$;
 
-revoke all on function public.create_task(uuid, text, integer, integer) from public, anon, authenticated;
+revoke all on function public.create_task(uuid, text, integer, integer, text, text) from public, anon, authenticated;
 revoke all on function public.increment_usage(uuid, text, integer) from public, anon, authenticated;
 revoke all on function public.decrement_usage(uuid, text) from public, anon, authenticated;
-grant execute on function public.create_task(uuid, text, integer, integer) to service_role;
+grant execute on function public.create_task(uuid, text, integer, integer, text, text) to service_role;
 grant execute on function public.increment_usage(uuid, text, integer) to service_role;
 grant execute on function public.decrement_usage(uuid, text) to service_role;

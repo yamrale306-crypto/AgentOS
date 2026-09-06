@@ -5,8 +5,10 @@ Autonomous web research agent: give it a goal, and it plans, searches the web, a
 - **Frontend** — Next.js 15 (App Router, TypeScript), dark responsive UI, PWA-ready
 - **Backend** — Express 5 + TypeScript, rate limited, CORS allowlisted
 - **Database** — Supabase (PostgreSQL + Auth)
-- **Models** — OpenRouter with primary → fallback model routing and timeouts
+- **Models** — multi-provider AI engine with a smart model router, per-stage model selection, token rotation, health monitoring, and automatic fallback (OpenRouter, DeepSeek, Groq, Google Gemini, Z.ai, Cloudflare Workers AI)
 - **Search** — DuckDuckGo results provider with URL decoding and sanitization
+
+See [`MULTI_MODEL.md`](MULTI_MODEL.md) for the full AI provider/router documentation.
 
 ## How it works
 
@@ -78,8 +80,16 @@ Backend (`.env`):
 | `SUPABASE_URL` | Supabase project URL |
 | `SUPABASE_SERVICE_ROLE_KEY` | Server-only key. Never expose to the browser |
 | `OPENROUTER_API_KEY` | OpenRouter key. Never expose to the browser |
-| `OPENROUTER_MODEL_PRIMARY` | Primary model id |
-| `OPENROUTER_MODEL_FALLBACK` | Fallback model id |
+| `DEEPSEEK_API_KEY` / `DEEPSEEK_API_KEYS` | DeepSeek key / comma-, newline-separated key list |
+| `GROQ_API_KEY` / `GROQ_API_KEYS` | Groq key(s) |
+| `GEMINI_API_KEY` / `GEMINI_API_KEYS` | Google Gemini key(s) |
+| `ZAI_API_KEY` / `ZAI_API_KEYS` | Z.ai (Zhipu) key(s) |
+| `CLOUDFLARE_API_TOKEN` + `CLOUDFLARE_ACCOUNT_ID` | Cloudflare Workers AI credentials |
+| `OPENROUTER_MODEL_PRIMARY` / `OPENROUTER_MODEL_FALLBACK` | Legacy single-provider pair (ignored in AUTO routing mode) |
+| `AI_ROUTING_ENABLED` | Use the multi-model router (default `true`); set `false` for legacy OpenRouter-only mode |
+| `AI_DEFAULT_MODE` | `auto` \| `quality` \| `balanced` \| `fast` \| `lowcost` (default `auto`) |
+| `AI_DEFAULT_MODEL` | Optional pinned model for AUTO routing |
+| `MAX_MODEL_ATTEMPTS` | Max models tried per call before giving up (default `6`) |
 | `MAX_STEPS` | Max agent loop iterations per task |
 | `MAX_SEARCHES` | Max searches per task |
 | `DAILY_TASK_LIMIT` | Daily task quota per user |
@@ -88,12 +98,15 @@ Backend (`.env`):
 | `MODEL_TIMEOUT_MS` | Model request timeout before fallback |
 | `LOG_LEVEL` | `debug` \| `info` \| `warn` \| `error` |
 
+See [`MULTI_MODEL.md`](MULTI_MODEL.md) for how routing, token rotation, fallback and
+provider/model additions work.
+
 Frontend (`.env.local`):
 
 | Variable | Description |
 | --- | --- |
 | `NEXT_PUBLIC_SUPABASE_URL` | Supabase project URL |
-| `NEXT_PUBLIC_SUPABASE_ANON_KEY` | Anon key (safe for the browser) |
+| `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY` | Publishable (anon-equivalent) key — safe for the browser |
 | `NEXT_PUBLIC_API_URL` | Backend base URL |
 
 ## API
@@ -111,6 +124,12 @@ Auth: `Authorization: Bearer <supabase-jwt>` (except `/health`).
 | `POST` | `/api/tasks/:id/cancel` | Request cancellation |
 | `POST` | `/api/tasks/:id/retry` | Re-run a failed task as a fresh run |
 | `DELETE` | `/api/tasks/:id` | Delete a finished task |
+| `GET` | `/api/system/status` | AI engine status (routing, models, providers) |
+| `GET` | `/api/system/models` | Registered models with health/capabilities |
+| `GET` | `/api/system/providers` | Providers with token health (masked) |
+| `GET` | `/api/system/tokens` | Token diagnostics (masked, server state) |
+| `POST` | `/api/system/test` | Live connectivity test for a provider (`{ provider }`) |
+| `POST` | `/api/system/playground` | Ad-hoc model call for diagnostics (`{ provider?, model?, mode?, prompt? }`) |
 
 Error codes: `UNAUTHORIZED` 401, `FORBIDDEN` 403, `NOT_FOUND` 404, `CONFLICT` 409 (invalid transition / still active), `QUOTA_EXCEEDED` 429, `RATE_LIMITED` 429, `INTERNAL_ERROR` 500.
 
@@ -131,7 +150,9 @@ Import the repository and set the project root to `frontend`, then set the three
 ### Security notes
 
 - The backend only ever reads the caller's identity from the validated Supabase JWT.
-- The service role key and OpenRouter key live only on the server.
+- The service role key and all provider keys live only on the server.
+- Provider keys are masked everywhere they surface (dashboard, logs, API); the
+  diagnostic endpoints never return raw credentials.
 - CORS is restricted to `FRONTEND_ORIGIN`; requests from other origins are rejected.
 - Request bodies are capped, and a global per-IP rate limiter protects the API.
 - Errors returned to clients never include stack traces or secrets.

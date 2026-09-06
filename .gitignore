@@ -11,3 +11,14 @@ dist/
 !.env.example
 *.log
 .DS_Store
+
+# ---------- SECRETS — never commit ----------
+# Local development credential file. NEVER commit or move into the repo.
+Dev Keys.txt
+dev-keys*.txt
+*.secret
+*.secret.*
+*.key
+*.pem
+*.jwk
+credentials.json
