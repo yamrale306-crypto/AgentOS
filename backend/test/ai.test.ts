@@ -144,12 +144,15 @@ it('rotates between tokens by least-recent use', () => {
 });
 
 describe('classifyTask', () => {
-  it('detects known categories', () => {
-    expect(classifyTask('summarize this article in short')).toBe('SOURCE_SUMMARIZATION');
-    expect(classifyTask('verify whether this fact is true')).toBe('FACT_VERIFICATION');
-    expect(classifyTask('extract all the emails into a table')).toBe('STRUCTURED_EXTRACTION');
-    expect(classifyTask('what is the capital of France')).toBe('FAST_SIMPLE_ANSWER');
-    expect(classifyTask('debug this javascript function')).toBe('CODING_TECHNICAL');
+  it.each([
+    ['summarize this article in short', 'SOURCE_SUMMARIZATION'],
+    ['verify whether this fact is true', 'FACT_VERIFICATION'],
+    ['extract all the emails into a table', 'STRUCTURED_EXTRACTION'],
+    ['what is the capital of France', 'FAST_SIMPLE_ANSWER'],
+    ['debug this javascript function', 'CODING_TECHNICAL'],
+    ['summarize the code changes', 'CODING_TECHNICAL']
+  ] as const)('classifies %s as %s', (prompt, category) => {
+    expect(classifyTask(prompt)).toBe(category);
   });
 
   it('defaults to web research analysis', () => {

@@ -90,8 +90,20 @@ describe('sanitizeSearchResults', () => {
 
 describe('duckDuckGoSearch error handling', () => {
   it('throws SearchRateLimitError on 429', async () => {
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ status: 429, ok: false, text: async () => '' }));
-    await expect(duckDuckGoSearch('test')).rejects.toBeInstanceOf(SearchRateLimitError);
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({ status: 429, ok: false, text: async () => '' })
+      .mockResolvedValueOnce({ status: 429, ok: false, text: async () => '' }));
+    await expect(duckDuckGoSearch('test', 5, { retryDelayMs: 0 })).rejects.toBeInstanceOf(SearchRateLimitError);
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('retries a transient server error once before succeeding', async () => {
+    const html = `<div class="result"><a class="result__a" href="https://ok.example/retry">OK</a></div>`;
+    vi.stubGlobal('fetch', vi.fn()
+      .mockResolvedValueOnce({ status: 503, ok: false, text: async () => '' })
+      .mockResolvedValueOnce({ status: 200, ok: true, text: async () => html }));
+    await expect(duckDuckGoSearch('test', 5, { retryDelayMs: 0 })).resolves.toHaveLength(1);
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 
   it('throws a DuckDuckGoSearchError on other HTTP errors', async () => {

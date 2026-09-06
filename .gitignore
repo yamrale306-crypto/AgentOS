@@ -15,6 +15,7 @@ dist/
 # Update staging area — never commit incoming code, backups, or extractions
 new-update/backups/
 new-update/extracted-code/
+new-update/extracted/
 # Transient plan files regenerate on every `plan`/`run`
 new-update/UPDATE_PLAN.json
 new-update/UPDATE_PLAN.md

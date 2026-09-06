@@ -14,6 +14,7 @@ const origins = parseOrigins(env.FRONTEND_ORIGIN);
 const requestLimiter = rateLimit({
   windowMs: 60 * 1000,
   limit: 120,
+  skip: (req) => req.method === 'POST' && req.path === '/api/tasks',
   standardHeaders: 'draft-8',
   legacyHeaders: false,
   message: { ok: false, error: { code: 'RATE_LIMITED', message: 'Too many requests. Please try again later.' } }
@@ -24,7 +25,7 @@ const taskCreationLimiter = rateLimit({
   limit: 10,
   standardHeaders: 'draft-8',
   legacyHeaders: false,
-  skip: (req) => req.method !== 'POST' || !req.path.includes('/tasks'),
+  skip: (req) => req.method !== 'POST' || req.path !== '/api/tasks',
   message: { ok: false, error: { code: 'RATE_LIMITED', message: 'You are creating tasks too quickly. Slow down and try again.' } }
 });
 

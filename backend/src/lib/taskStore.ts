@@ -10,6 +10,7 @@ type JsonRecord = { [key: string]: unknown };
 const TASK_FIELDS = 'id,user_id,prompt,status,plan,current_step,result,error,steps_used,searches_used,model_used,model_mode,model,provider_used,fallback_used,sources,created_at,updated_at,completed_at';
 
 const LIST_FIELDS = 'id,prompt,status,current_step,steps_used,searches_used,model_used,provider_used,model_mode,created_at,completed_at';
+const INTERRUPTED_TASK_AGE_MS = 15 * 60 * 1000;
 
 function noRows(row: unknown): boolean {
   return row === undefined || row === null;
@@ -132,4 +133,22 @@ export async function incrementSearchUsage(userId: string, maxSearchesPerDay: nu
   if (error) throw error;
   const result = (data ?? {}) as JsonRecord;
   return { count: Number(result.count ?? 0), over: Boolean(result.over) };
+}
+
+export async function recoverInterruptedTasks(now = Date.now()): Promise<number> {
+  const cutoff = new Date(now - INTERRUPTED_TASK_AGE_MS).toISOString();
+  const { data, error } = await supabaseAdmin
+    .from('tasks')
+    .update({
+      status: 'failed',
+      current_step: 'Failed',
+      error: 'Task interrupted by a server restart.',
+      completed_at: new Date(now).toISOString(),
+      updated_at: new Date(now).toISOString()
+    })
+    .in('status', ACTIVE_STATUSES)
+    .lt('updated_at', cutoff)
+    .select('id');
+  if (error) throw error;
+  return Array.isArray(data) ? data.length : 0;
 }

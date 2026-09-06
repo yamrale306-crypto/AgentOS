@@ -4,6 +4,7 @@ export type { SearchResult };
 
 export interface SearchOptions {
   timeoutMs?: number;
+  retryDelayMs?: number;
 }
 
 export interface SearchProvider {
@@ -97,32 +98,62 @@ export function parseDuckDuckGoHtml(html: string, limit: number): SearchResult[]
   return sanitizeSearchResults(out);
 }
 
-export async function duckDuckGoSearch(query: string, limit = 5, options?: { timeoutMs?: number }): Promise<SearchResult[]> {
+export async function duckDuckGoSearch(query: string, limit = 5, options?: SearchOptions): Promise<SearchResult[]> {
   const timeoutMs = options?.timeoutMs ?? 10000;
+  const retryDelayMs = options?.retryDelayMs;
   const endpoint = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
-  let response: Response;
-  try {
-    response = await fetch(endpoint, {
-      headers: {
-        'user-agent': 'Mozilla/5.0 (compatible; AgentOS/1.0; +https://agentos.app)',
-        accept: 'text/html'
-      },
-      signal: AbortSignal.timeout(timeoutMs)
-    });
-  } catch (e) {
-    if (e instanceof Error && e.name === 'TimeoutError') {
-      throw new DuckDuckGoSearchError('Search provider timed out.', 'timeout');
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const response = await fetch(endpoint, {
+        headers: {
+          'user-agent': 'Mozilla/5.0 (compatible; AgentOS/1.0; +https://agentos.app)',
+          accept: 'text/html'
+        },
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+
+      if (response.ok) {
+        const results = parseDuckDuckGoHtml(await response.text(), limit);
+        if (results.length === 0) throw new DuckDuckGoSearchError('No search results returned for this query.', 'no_results');
+        return results;
+      }
+
+      if (response.status === 429 || response.status === 202) {
+        if (attempt === 0) {
+          await waitBeforeRetry(retryDelayMs);
+          continue;
+        }
+        throw new SearchRateLimitError(response.status === 202 ? 'Search provider is temporarily throttling this network.' : undefined);
+      }
+
+      if (response.status >= 500 && attempt === 0) {
+        await waitBeforeRetry(retryDelayMs);
+        continue;
+      }
+
+      throw new DuckDuckGoSearchError(`Search provider returned HTTP ${response.status}.`, 'http');
+    } catch (e) {
+      if (e instanceof SearchRateLimitError || e instanceof DuckDuckGoSearchError) throw e;
+      if (attempt === 0 && isRetryableSearchError(e)) {
+        await waitBeforeRetry(retryDelayMs);
+        continue;
+      }
+      if (e instanceof Error && e.name === 'TimeoutError') {
+        throw new DuckDuckGoSearchError('Search provider timed out.', 'timeout');
+      }
+      throw new DuckDuckGoSearchError(`Search request failed: ${e instanceof Error ? e.message : 'unknown error'}`, 'parse');
     }
-    throw new DuckDuckGoSearchError(`Search request failed: ${e instanceof Error ? e.message : 'unknown error'}`, 'parse');
   }
+  throw new DuckDuckGoSearchError('Search provider request failed after retry.', 'http');
+}
 
-  if (response.status === 429) throw new SearchRateLimitError();
-  if (response.status === 202) throw new SearchRateLimitError('Search provider is temporarily throttling this network.');
-  if (!response.ok) throw new DuckDuckGoSearchError(`Search provider returned HTTP ${response.status}.`, 'http');
+function isRetryableSearchError(error: unknown): boolean {
+  return error instanceof Error && (error.name === 'TimeoutError' || /fetch failed|network|econnreset|eai_again/i.test(error.message));
+}
 
-  const results = parseDuckDuckGoHtml(await response.text(), limit);
-  if (results.length === 0) throw new DuckDuckGoSearchError('No search results returned for this query.', 'no_results');
-  return results;
+async function waitBeforeRetry(configuredDelayMs?: number): Promise<void> {
+  const delayMs = configuredDelayMs ?? 100 + Math.floor(Math.random() * 250);
+  await new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
 export class DuckDuckGoProvider implements SearchProvider {
