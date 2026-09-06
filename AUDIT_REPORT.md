@@ -35,10 +35,9 @@ Bugs fixed during this audit pass: malformed model tool-call JSON no longer fail
 
 ## 2. Repository & Version Control
 
-- The working directory **is not a git repository** (`git status` → "fatal: not a git repository").
-- No `.gitignore`-based secret scanning was possible; a manual scan of the source tree found **no committed secrets** (no `sk-*`, JWTs, or service-role keys in `backend/src`, `frontend` (excluding `node_modules`), `supabase/`, or `*.md`).
-- `node_modules` and `dist/`, `.next/` build artifacts exist on disk but are not under version control.
-- **Action for release:** run `git init` at the top level (or mirror into a private repo), add `.gitignore` for `backend/node_modules`, `backend/dist`, `frontend/node_modules`, `frontend/.next`, `.env`, `*.log`. **MANDATORY before handoff.**
+- The repository is a git repo (3 commits: `67c36b6` initial source, `834dfe9` release hardening, `199d761` final release report) with remote `origin` = `https://github.com/yamrale306-crypto/AgentOS`.
+- A full-tree scan of tracked files found **no committed secrets** (no `sk-*`, JWTs, or service-role keys; the only flags were placeholder `.env.example` templates, test-only values like `sk-test-key-not-a-real-secret`, and doc examples).
+- `node_modules`, `dist/`, `.next/`, `_next` and `.env*` are ignored. This pass additionally untracked and ignored `*.tsbuildinfo` (`frontend/tsconfig.tsbuildinfo` was committed and dirtied the tree on every build).
 
 ---
 
@@ -93,7 +92,7 @@ Bugs fixed during this audit pass: malformed model tool-call JSON no longer fail
 
 - `tasks` and `usage_daily` have RLS enabled (PASS).
 - User policies: SELECT/INSERT/UPDATE/DELETE scoped to `auth.uid() = user_id` — no cross-user reads or writes (PASS).
-- Quota functions (`create_task`, `increment_usage`, `decrement_usage`) are `SECURITY DEFINER` with pinned `search_path`, and `EXECUTE` is revoked from `anon`/`authenticated` — only `service_role` may call them (PASS).
+- Quota functions (`create_task`, `increment_usage`, `decrement_usage`) are `SECURITY DEFINER` with pinned `search_path`, and `EXECUTE` is restricted to `service_role` only — PASS. **Correction from previous pass:** the original `revoke ... from anon, authenticated` did **not** remove the PostgreSQL default `EXECUTE ... to PUBLIC` grant, so `anon`/`authenticated` still held EXECUTE on the security-definer RPCs (verified on a live PostgreSQL 17: anon/auth/t/service = t/t/t). This pass changed the revokes to `from public, anon, authenticated` (re-verified: f/f/t) in both `schema.sql` and the migration. Before this fix an anon-key client could call `create_task`/`increment_usage` with arbitrary limits and user ids (quota bypass + cross-user row injection); it is now closed.
 - **REVIEW — residual risk:** because the `anon`-key client is used in the browser for Auth, the RLS `UPDATE`/`DELETE` policies on `tasks` allow a signed-in user to directly modify/delete their own rows via the anon key (self-faking their own history/limits, no cross-user access). Accepted for this release; the alternative (RESTRICTED policies + all mutations via service-role API) is a documented future hardening (see §29).
 
 ---
@@ -287,7 +286,7 @@ Test suites (all green this pass, 97/97):
 2. **Failed searches consume daily search quota** — deliberate V1 trade-off to avoid a concurrent-task race on the shared per-user daily counter.
 3. **RLS self-mutation** via anon key on own `tasks` rows (self-faking only; no cross-user access).
 4. **No service worker/offline**; **no APM/metrics shipping**; **no OpenAPI** — all documented non-blockers.
-5. **git not initialized** — version control is prerequisite (§2).
+5. Version control now initialized on `main` with a GitHub remote; `.gitignore` covers generated build artifacts and env files.
 6. Live behavior of OpenRouter/DDG/Supabase at the deployed location unverified without credentials.
 
 ---
@@ -388,3 +387,19 @@ Platform: `render.yaml`, `README.md`.
 - `backend/src/agent/prompts.ts` — removed dead `SEARCH_TOOL_SUMMARY_PROMPT`.
 - `backend/test/agent.test.ts` — 4 new tests; deterministic `beforeEach` mock resets.
 - `frontend/app/page.tsx` — create/retry detail-refresh race fix.
+
+---
+
+## 32. Release-Validation Pass (2026-09-06) — actual results
+
+This pass re-ran every check **against the actual GitHub repository** (`git clone`), performed **clean installs**, and — crucially — **executed `supabase/schema.sql` and the RPCs against a live PostgreSQL 17** (throwaway scratch database). Three previously-undetected, release-blocking SQL bugs existed because the test suite mocks the Supabase client and the SQL had never been executed against a database:
+
+1. **CRITICAL — `create_task` always failed on real Postgres.** `insert ... returning id, status, created_at into v_task` (where `v_task` is `public.tasks%rowtype`) is matched **positionally** by PL/pgSQL, so the returned `status` text was cast into the row-type's second field (`user_id`, a `uuid`) → `invalid input syntax for type uuid: "queued"` on **every** task creation (reproduced on PG 17 with the exact shipped function; the earlier passes' tests mock the RPC and never saw it). Fixed: `returning id, status, created_at into v_id, v_status, v_created_at` (scalar variables) in **both** `schema.sql` and the migration. Re-run against PG 17 → `{"id":..., "status":"queued", "created_at":...}` created correctly, and `active_limit`/`daily_limit`/search-quota paths all returned the expected envelopes with correct counter refunds.
+
+2. **HIGH — quota RPCs remained executable by `anon`/`authenticated`.** PostgreSQL grants `EXECUTE` on new functions to `PUBLIC` by default; `revoke ... from anon, authenticated` leaves that PUBLIC grant in place. Verified on PG 17 with the shipped statements: anon=t, authenticated=t, service=t. Because the functions are `SECURITY DEFINER`, an anon-key client could call `create_task`/`increment_usage` with arbitrary limits/user ids — quota bypass and cross-user row injection. Fixed: `revoke ... from public, anon, authenticated` (re-verified: anon=f, authenticated=f, service=t). Applies to `create_task`, `increment_usage`, `decrement_usage` in **both** files.
+
+3. **MEDIUM — per-IP rate limiting is wrong behind Render's proxy.** Express defaults `req.ip` to the direct peer; on Render everything appears to come from the LB, so the 120/min and 10/min limits would bucket all users together. Fixed: in production `createApp()` sets `trust proxy = 1` (standard single-hop proxy config; no effect in dev/test where spoofing is not a concern).
+
+Hygiene: `frontend/tsconfig.tsbuildinfo` was tracked and dirtied the tree on every build → untracked + added `*.tsbuildinfo` to `.gitignore`.
+
+Re-verified after the changes (all green): backend `typecheck` / `test` (97/97, 8 files) / `build`; frontend `tsc --noEmit` / `next build` (Next 15.5.25, `/` static 71 kB / 174 kB); `git diff --check` clean; live DuckDuckGo query through the shipping code path returned 5 decoded results in ~1.1 s; local runtime smoke test returned correct 200/401/403/404 envelopes. The 20-task live matrix and live Supabase/OpenRouter/Render/Vercel checks remain **MANUAL LIVE VALIDATION REQUIRED** (no credentials available — nothing faked).

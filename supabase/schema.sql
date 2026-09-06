@@ -132,7 +132,9 @@ as $$
 declare
   v_count integer;
   v_active integer;
-  v_task public.tasks%rowtype;
+  v_id uuid;
+  v_status text;
+  v_created_at timestamptz;
 begin
   insert into public.usage_daily (user_id, usage_date, usage_type, count)
   values (p_user, (now() at time zone 'UTC')::date, 'task', 1)
@@ -157,15 +159,15 @@ begin
 
   insert into public.tasks (user_id, prompt, status)
   values (p_user, p_prompt, 'queued')
-  returning id, status, created_at into v_task;
+  returning id, status, created_at into v_id, v_status, v_created_at;
 
-  return jsonb_build_object('id', v_task.id, 'status', v_task.status, 'created_at', v_task.created_at);
+  return jsonb_build_object('id', v_id, 'status', v_status, 'created_at', v_created_at);
 end;
 $$;
 
-revoke all on function public.create_task(uuid, text, integer, integer) from anon, authenticated;
-revoke all on function public.increment_usage(uuid, text, integer) from anon, authenticated;
-revoke all on function public.decrement_usage(uuid, text) from anon, authenticated;
+revoke all on function public.create_task(uuid, text, integer, integer) from public, anon, authenticated;
+revoke all on function public.increment_usage(uuid, text, integer) from public, anon, authenticated;
+revoke all on function public.decrement_usage(uuid, text) from public, anon, authenticated;
 grant execute on function public.create_task(uuid, text, integer, integer) to service_role;
 grant execute on function public.increment_usage(uuid, text, integer) to service_role;
 grant execute on function public.decrement_usage(uuid, text) to service_role;

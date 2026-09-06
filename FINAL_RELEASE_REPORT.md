@@ -9,7 +9,7 @@ Status notation: **(PASS)** = actually executed/verified; **(CODE)** = verified 
 
 **CONDITIONAL GO**
 
-Code, automated verification, and local runtime behavior are solid. Live-provider and end-to-end items remain unexecuted because no Supabase project, Supabase credentials, OpenRouter key, or deployed infrastructure were available. **No live result has been fabricated.** Go-live is authorized after the Manual Actions in §17 are completed and §12/§13 are recorded with real data.
+Code, automated verification, **and SQL now empirically executed against a live PostgreSQL 17** are solid. Live-provider and end-to-end items remain unexecuted because no Supabase project, Supabase credentials, OpenRouter key, or deployed infrastructure were available. **No live result has been fabricated.** This pass found and fixed two SQL bugs that would have broken provisioning and task creation in production (§2, §14), and re-verified everything afterward. Go-live is authorized after the Manual Actions in §17 are completed and §12/§13 are recorded with real data.
 
 ---
 
@@ -19,10 +19,16 @@ AgentOS V1 is a two-service app (Next.js 15 frontend + Express/TypeScript backen
 
 Release hardening performed in this report pass:
 
-1. Git repository initialized, `.gitignore` hardened (env variants protected, `.env.example` kept), initial source commit `67c36b6`; hardening commit `834dfe9`. `git diff --check` clean; secret scan clean (only placeholder templates).
+1. Git repository initialized, `.gitignore` hardened (env variants protected, `.env.example` kept, `*.tsbuildinfo` untracked), initial source commit `67c36b6`; hardening commit `834dfe9`. `git diff --check` clean; secret scan clean (only placeholder templates).
 2. **Fixed** `render.yaml` `healthCheckPath` `→ /health` (declared path did not match the actual route — Render would have marked the service unhealthy in a restart loop).
 3. **Added** production guard in `frontend/lib/api.ts`: builds without `NEXT_PUBLIC_API_URL` now fail fast with a clear error instead of silently pointing browsers at `http://localhost:10000`. Verified: the guard aborts the build with the message, and a build with the variable set succeeds and bakes the URL into the client/server bundles.
 4. Aligned README/audit docs to the `GET /health` route (the checklist's documented path).
+
+**Release-validation pass (this report, second pass):** `supabase/schema.sql` + the migration were executed against a throwaway live PostgreSQL 17 instance (not mocked), which surfaced three pre-existing bugs the unit suite could never catch (tests mock the Supabase client):
+
+5. **CRITICAL — `create_task` failed on every real-PostgreSQL call.** `insert ... returning id, status, created_at into v_task` with `v_task public.tasks%rowtype` binds positionally, casting the returned `status` text into the row-type's `user_id` uuid slot → `invalid input syntax for type uuid: "queued"` → any task creation via the SQL RPC 500'd. Reproduced with the exact shipped function; fixed to scalar variables in `schema.sql` and `001_add_sources_and_usage.sql`; re-verified on PG 17 (task rows created, both `active_limit` and `daily_limit` paths return the documented envelopes, usage counters refunded atomically).
+6. **HIGH — quota RPCs were still executable by `anon`/`authenticated`.** PostgreSQL default-grants `EXECUTE` on new functions to `PUBLIC`; revoking only from `anon, authenticated` leaves it open. Verified on PG 17 with the shipped statements: anon=t/auth=t/service=t → SECURITY DEFINER `create_task`/`increment_usage` callable by an anon-key client with arbitrary limits/user ids (quota bypass, cross-user row injection). Fixed (`revoke ... from public, anon, authenticated` in both files); re-verified: anon=f/auth=f/service=t.
+7. **MEDIUM — per-IP rate limiting bucketed all users together behind Render's proxy.** Production `createApp()` now sets `trust proxy = 1` (single-hop standard); no effect in dev/test.
 
 Remaining work is exclusively live validation and infrastructure provisioning (Supabase project, Render/Vercel deployments, OpenRouter key, 20-task run). No architecture changes, no unrelated features.
 
@@ -36,7 +42,7 @@ Remaining work is exclusively live validation and infrastructure provisioning (S
 | Backend typecheck | **(PASS)** — `tsc --noEmit` |
 | Backend build | **(PASS)** — `tsc -p tsconfig.json` → `dist/` |
 | Frontend typecheck | **(PASS)** — `npx tsc --noEmit` |
-| Frontend build | **(PASS)** — Next 15.5.25, `/` static-prerendered 70.9 kB / 174 kB first load (with `NEXT_PUBLIC_API_URL` set) |
+| Frontend build | **(PASS)** — Next 15.5.25, `/` static-prerendered 71 kB / 174 kB first load (with `NEXT_PUBLIC_API_URL` set) |
 | Frontend build (var missing) | **(PASS, fails fast)** — aborts: `NEXT_PUBLIC_API_URL must be set for production builds.` |
 
 ---
@@ -45,7 +51,7 @@ Remaining work is exclusively live validation and infrastructure provisioning (S
 
 | Component | Result |
 |---|---|
-| Supabase | **(MANUAL)** — not provisioned. `supabase/schema.sql` + `supabase/migrations/001_add_sources_and_usage.sql` verified idempotent and consistent with all app queries (§17 checklist). No live project detected, so nothing is claimed. |
+| Supabase | **(PASS, empirical)** — `supabase/schema.sql` + `supabase/migrations/001_add_sources_and_usage.sql` were executed against a live PostgreSQL 17 scratch database (roles `anon`/`authenticated`/`service_role`, `auth` schema + `auth.users` + `auth.uid()` stub). Schema applies cleanly; `create_task` returns the documented `{id,status,created_at}` envelope; `active_limit` and `daily_limit` paths return the documented `{error}` envelopes with atomic counter refunds; transitions observed via guarded `WHERE status IN (...)` behave as the backend expects (terminal states cannot be overwritten). No live Supabase *project* exists, so the deployed E2E remains **(MANUAL)**. |
 | Render | **(CODE)** — `render.yaml` single web service, rootDir `backend`, `npm install && npm run build`, `npm start`, `NODE_VERSION: 20`, `healthCheckPath: /health` (now matches the real route). Deployment itself **(MANUAL)**. |
 | Vercel | **(CODE)** — no config file needed (Next.js is auto-detected); requires project env vars (§17). `NEXT_PUBLIC_API_URL` production guard verified at build time. No localhost fallback can ship in production. |
 | OpenRouter | **(MANUAL)** — no API key available; primary/fallback model IDs must be verified against the OpenRouter dashboard before go-live. |
@@ -79,8 +85,9 @@ Remaining work is exclusively live validation and infrastructure provisioning (S
 
 ## 8. Quota Verification
 
-- Atomic PostgreSQL `increment_usage`/`decrement_usage`/`create_task` functions enforce daily task, daily search, per-task search, per-task step, and active-task limits without check-then-insert races — **(CODE)**, unit-tested in `agent.test.ts`/`api.test.ts` — **(PASS)**.
-- Live quota enforcement against real Supabase: **(MANUAL)**.
+- Atomic PostgreSQL `increment_usage`/`decrement_usage`/`create_task` functions enforce daily task, daily search, per-task search, per-task step, and active-task limits without check-then-insert races — **executed on a live PostgreSQL 17** in this pass: `create_task` created tasks and hit `{"error":"active_limit"}` (2 active of 2 max) then `{"error":"daily_limit"}` (5 of 5 used) with `usage_daily` counters correct and refunded (no phantom counts); `increment_usage` returned `{over:false}` for counts 1–3 and `{over:true}` for 4–5 at a max of 3 — **(PASS, empirical)**.
+- Guarded status transitions were executed against the real schema (queued → planning → searching → completed), including an attempt to overwrite a `completed` row from an active-state guard (0 rows, as designed) — **(PASS, empirical)**.
+- Live quota enforcement against a real Supabase project: **(MANUAL)**.
 
 ---
 
@@ -91,6 +98,7 @@ Remaining work is exclusively live validation and infrastructure provisioning (S
 - Error handler never returns stack traces or internals — **(CODE)**.
 - Logger redacts `sk-*`, JWTs, and Bearer tokens — unit-tested — **(PASS)**.
 - RLS policies scope all operations to `auth.uid() = user_id` — **(CODE)**; residual self-mutation risk documented in audit §28.
+- **`EXECUTE` on the SECURITY DEFINER quota RPCs closed to `anon`/`authenticated`** — the prior `revoke ... from anon, authenticated` left PostgreSQL's default `EXECUTE ... to PUBLIC` grant intact (verified on live PG 17: all three roles could execute). Fixed to `revoke ... from public, anon, authenticated` in `schema.sql` + migration; re-verified anon=f/auth=f/service=t — **(PASS, empirical)**.
 - Cross-user authorization smoke test (User A vs User B task isolation): **(MANUAL)**.
 - Secret scan of the tracked tree: clean (only placeholder `.env.example` templates) — **(PASS)**.
 
@@ -163,10 +171,13 @@ Record per task: Task ID · Prompt · Status · Completion time · Steps used ·
 
 ## 14. Failures
 
-No failures were observed in any verification actually executed this pass (all executed items passed). Two pre-live defects were **found and fixed** (not failures of the running system):
+No failures were observed in any verification actually executed this pass (all executed items passed). Five pre-live defects were **found and fixed** (not failures of the running system):
 
 1. `render.yaml` health check pointed at `/api/health` while the app serves `/health` → fixed to `/health`.
 2. Frontend would silently use `http://localhost:10000` in production if `NEXT_PUBLIC_API_URL` were omitted → now fails the production build loudly.
+3. **`create_task` SQL returned `invalid input syntax for type uuid: "queued"` on real PostgreSQL** (row-type variable bound positionally to a multi-column `RETURNING`) — every task creation through the RPC would have 500'd. Found by executing the shipped SQL on live PG 17 (the test suite mocks the RPC and could not catch it); fixed to scalar variables; re-verified.
+4. **SECURITY DEFINER quote RPCs were callable by `anon`/`authenticated`** (default PUBLIC `EXECUTE` grant not revoked) — quota bypass + cross-user row injection via the anon key. Found + fixed (revoke from `public`) + re-verified on live PG 17.
+5. **Per-IP rate limits would bucket all render users behind the LB's IP** → production `trust proxy = 1` added.
 
 Live failures (if any emerge in the §12 run) must be recorded here with task ID, stage, error class, retry outcome, quota impact, and user-facing status.
 
@@ -174,7 +185,7 @@ Live failures (if any emerge in the §12 run) must be recorded here with task ID
 
 ## 15. Fixes After Live Testing
 
-None — live testing has not yet run. Fixes applied during the final audit (code-level, pre-live) are listed under §19; the most recent hardening changes are `render.yaml`, `frontend/lib/api.ts`, `.gitignore`, README, audit doc.
+None — live testing has not yet run. Fixes applied during the final audit and this release-validation pass (code/SQL-level, pre-live) are listed under §19: `render.yaml`, `frontend/lib/api.ts`, `.gitignore`, README, audit doc, `backend/src/app.ts`, and the two SQL files (`create_task` + RPC `EXECUTE` revocation).
 
 ---
 
@@ -191,8 +202,8 @@ None — live testing has not yet run. Fixes applied during the final audit (cod
 
 ## 17. Manual Actions Required (owner-only)
 
-1. **Git**: push the initialized repository (commits `67c36b6`, `834dfe9`) to a private remote; add the remote. Repo currently local-only.
-2. **Supabase**: create a project; run `supabase/schema.sql` (idempotent) in the SQL editor; enable Email provider under Auth. Verify `auth.users` exists and `tasks.user_id` FK resolves.
+1. **Git**: commit + push the release-validation fixes (uncommitted working tree at the time of writing — `backend/src/app.ts`, `supabase/schema.sql`, `supabase/migrations/001_add_sources_and_usage.sql`, `.gitignore`, `frontend/tsconfig.tsbuildinfo` removal, plus these reports). Remote `origin` = `https://github.com/yamrale306-crypto/AgentOS`.
+2. **Supabase**: create a project; run `supabase/schema.sql` (verified to execute cleanly on PostgreSQL 17 in this pass) in the SQL editor. **If the project was provisioned with the previous schema, re-run the migration file** (`001_add_sources_and_usage.sql`) to install the fixed `create_task` and the `public`-revoke before go-live. Enable Email provider under Auth. Verify `auth.users` exists and `tasks.user_id` FK resolves.
 3. **Keys**: obtain `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, and `NEXT_PUBLIC_SUPABASE_ANON_KEY` from project settings; obtain `OPENROUTER_API_KEY` and confirm the primary + fallback model IDs on the OpenRouter dashboard.
 4. **Backend env (Render)**: `PORT`, `FRONTEND_ORIGIN` (deployed frontend origin), `APP_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL_PRIMARY`, `OPENROUTER_MODEL_FALLBACK`, `MAX_STEPS`, `MAX_SEARCHES`, `DAILY_TASK_LIMIT`, `DAILY_SEARCH_LIMIT`, `MAX_ACTIVE_TASKS_PER_USER`, `MODEL_TIMEOUT_MS`, `LOG_LEVEL` — never paste real values into the repo.
 5. **Render**: deploy backend via blueprint or web service (rootDir `backend`, Node 20, start `npm start`); confirm `/health` returns `status: ok` and the health check passes.
@@ -227,11 +238,17 @@ None — live testing has not yet run. Fixes applied during the final audit (cod
 
 ## 19. Final Changed Files
 
-- `.gitignore` — hardened ignore rules for env variants (`.env.production`, `.env.*.local`) while keeping `.env.example`.
+- `.gitignore` — hardened ignore rules for env variants (`.env.production`, `.env.*.local`) while keeping `.env.example`; added `*.tsbuildinfo`.
+- `frontend/tsconfig.tsbuildinfo` — removed from version control (was tracked; dirtied the tree on every build).
 - `render.yaml` — `healthCheckPath: /health` (was `/api/health`).
 - `frontend/lib/api.ts` — fail-fast production guard for `NEXT_PUBLIC_API_URL`.
 - `README.md` — health endpoint documented as `/health`.
-- `AUDIT_REPORT.md` — aligned `/health` reference.
+- `AUDIT_REPORT.md` — aligned `/health` reference; corrected §2 and §8; added §32 release-validation record.
+- `FINAL_RELEASE_REPORT.md` — this file.
+- **Release-validation fixes (uncommitted in the working tree):**
+  - `backend/src/app.ts` — production-only `trust proxy = 1` (per-IP rate limits behind Render's LB).
+  - `supabase/schema.sql` — `create_task` `RETURNING ... INTO` scalar variables fix; RPC `EXECUTE` revoked from `public, anon, authenticated`.
+  - `supabase/migrations/001_add_sources_and_usage.sql` — same two fixes.
 - (Already in the initial commit, from the audit pass) `backend/src/agent/agent.ts` (malformed tool-JSON recovery + max-steps break), `backend/src/lib/taskStore.ts` (dead `rollbackUsage` removed), `backend/src/agent/prompts.ts` (dead prompt removed), `backend/test/agent.test.ts` (4 new tests + deterministic mock resets), `frontend/app/page.tsx` (create/retry detail-refresh race fix).
 
 ---
@@ -241,10 +258,11 @@ None — live testing has not yet run. Fixes applied during the final audit (cod
 **CONDITIONAL GO.**
 
 Evidence:
-- **(PASS)** Backend: 97/97 tests, typecheck, build; Frontend: typecheck + production build (and a proven fail-fast guard).
+- **(PASS)** Backend: 97/97 tests, typecheck, build; Frontend: typecheck + production build (and a proven fail-fast guard) — all re-run after the SQL/app fixes.
+- **(PASS, empirical)** `supabase/schema.sql` + migration executed on live PostgreSQL 17: `create_task` works (the previously broken RPC is fixed); `active_limit` / `daily_limit` / usage-counter paths behave as documented; SECURITY DEFINER RPCs no longer executable by `anon`/`authenticated` (revoke-from-`public` fix verified).
 - **(PASS)** Local runtime: `/health` returns a clean envelope and degrades gracefully when the DB is unreachable; unauthenticated requests get `401 UNAUTHORIZED`; unknown routes get `404`; helmet + rate-limit headers verified live on the actual server.
 - **(PASS, live)** DuckDuckGo integration returned real, correctly decoded results through the shipping code path.
-- **(CODE)** Auth/JWT validation, RLS, atomic quota functions, CORS, error redaction reviewed and consistent.
-- **(MANUAL)** Supabase provisioning, OpenRouter key/model verification, Render/Vercel deployment, account flows, 20-task validation, and cross-user smoke tests.
+- **(CODE)** Auth/JWT validation, RLS, CORS, error redaction reviewed and consistent; production `trust proxy` fixed for per-IP rate limits.
+- **(MANUAL)** Supabase provisioning (and re-running the migration if the project predates the SQL fixes), OpenRouter key/model verification, Render/Vercel deployment, account flows, 20-task validation, and cross-user smoke tests.
 
-No material defect is known in the code. The release is authorized to proceed once §17 items 2–7 are completed and the §12/§13 matrices are populated with real results. Do not claim GO until those are recorded.
+The SQL defects that would have surfaced at provisioning/first-task-creation time are now fixed and verified against a real database. No material defect is known in the code. The release is authorized to proceed once §17 items 2–7 are completed and the §12/§13 matrices are populated with real results. Do not claim GO until those are recorded.

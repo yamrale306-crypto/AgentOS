@@ -31,6 +31,12 @@ export function createApp(): Express {
   const app = express();
   app.disable('x-powered-by');
 
+  // Render (and most hosted environments) terminate TLS and forward requests;
+  // without this, per-IP rate limits would bucket every user behind the proxy's IP.
+  if (env.NODE_ENV === 'production') {
+    app.set('trust proxy', 1);
+  }
+
   app.use(
     helmet({
       contentSecurityPolicy: false
