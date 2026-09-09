@@ -2,9 +2,9 @@ import './globals.css';
 import type { Metadata, Viewport } from 'next';
 
 export const metadata: Metadata = {
-  title: 'AgentOS — Autonomous Web Research Agent',
+  title: 'AgentOS — AI Operating Environment',
   description:
-    'Give AI a goal. AgentOS plans, searches the web, analyzes the findings, and delivers a verified answer with sources you can check.',
+    'Tell AgentOS what you want accomplished. Autonomous agents handle reasoning, tools, execution, verification, and delivery.',
   manifest: '/manifest.webmanifest',
   icons: {
     icon: [

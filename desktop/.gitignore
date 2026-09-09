@@ -1,0 +1,10 @@
+# Node
+node_modules/
+package-lock.json
+
+# Rust / Tauri build output (regenerate with `npm run build`)
+src-tauri/target/
+src-tauri/gen/
+
+# Logs
+*.log

@@ -2,6 +2,7 @@ node_modules/
 .next/
 out/
 dist/
+.turbo/
 *.tsbuildinfo
 .env
 .env.local
@@ -27,6 +28,13 @@ __pycache__/
 # Local development credential files (may contain real API keys).
 Dev Keys.txt
 Dev\ Keys.txt
+
+# Legacy nested repository (contains its own .git and local credential files).
+# It was historically linked into the monorepo index as a gitlink with no
+# .gitmodules mapping. It is not part of the pnpm workspace; keep it ignored
+# so its contents can never be accidentally tracked by this repo.
+AgentOS/
+!AgentOS/README.md
 # ---------- SECRETS — never commit ----------
 # Local development credential file. NEVER commit or move into the repo.
 Dev Keys.txt

@@ -45,23 +45,50 @@ export function TaskComposer({ onSubmit }: TaskComposerProps) {
         onChange={(e) => setPrompt(e.target.value)}
         placeholder={PLACEHOLDER}
         maxLength={4000}
+        style={{
+          minHeight: 120,
+          marginBottom: 12,
+          background: 'var(--surface)',
+          border: '1px solid var(--border-strong)',
+          borderRadius: 'var(--radius-md)',
+          color: 'var(--text)',
+          padding: '12px 14px',
+          fontSize: 14,
+          lineHeight: 1.6,
+        }}
       />
-      <div className="composer-options">
-        <label className="composer-field">
-          <span className="muted">Mode</span>
-          <select value={mode} onChange={(e) => setMode(e.target.value as ModelMode)} aria-label="Model mode">
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 12 }}>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-secondary)' }}>
+          <span className="label">Mode</span>
+          <select
+            value={mode}
+            onChange={(e) => setMode(e.target.value as ModelMode)}
+            aria-label="Model mode"
+            style={{
+              width: 'auto',
+              minWidth: 140,
+              background: 'var(--surface)',
+              border: '1px solid var(--border-strong)',
+              borderRadius: 'var(--radius-md)',
+              color: 'var(--text)',
+              padding: '8px 32px 8px 12px',
+              fontSize: 13,
+              appearance: 'none',
+              backgroundImage: "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%236b7687' d='M6 8L1 3h10z'/%3E%3C/svg%3E\")",
+              backgroundRepeat: 'no-repeat',
+              backgroundPosition: 'right 12px center',
+              cursor: 'pointer',
+            }}
+          >
             {MODE_OPTIONS.map((option) => (
               <option key={option.value} value={option.value} title={option.hint}>
                 {option.label}
               </option>
             ))}
           </select>
-          <span className="muted composer-hint">
-            {MODE_OPTIONS.find((option) => option.value === mode)?.hint}
-          </span>
         </label>
-        <label className="composer-field">
-          <span className="muted">Model override (optional)</span>
+        <label style={{ display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12, color: 'var(--text-secondary)', flex: 1, minWidth: 180 }}>
+          <span className="label">Model override (optional)</span>
           <input
             type="text"
             value={model}
@@ -69,14 +96,27 @@ export function TaskComposer({ onSubmit }: TaskComposerProps) {
             placeholder="e.g. deepseek/deepseek-chat"
             maxLength={200}
             aria-label="Model override"
+            style={{
+              background: 'var(--surface)',
+              border: '1px solid var(--border-strong)',
+              borderRadius: 'var(--radius-md)',
+              color: 'var(--text)',
+              padding: '8px 12px',
+              fontSize: 13,
+            }}
           />
         </label>
       </div>
-      <div className="actions composer-actions">
-        <button className="btn" type="submit" disabled={busy || prompt.trim().length < 3}>
-          {busy ? 'Starting…' : 'Run Agent'}
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+        <button
+          className="btn btn-primary"
+          type="submit"
+          disabled={busy || prompt.trim().length < 3}
+          style={{ minWidth: 140 }}
+        >
+          {busy ? 'Starting…' : 'Run →'}
         </button>
-        <span className="muted char-count">{prompt.length}/4000</span>
+        <span className="muted" style={{ fontSize: 12 }}>{prompt.length}/4000</span>
       </div>
     </form>
   );

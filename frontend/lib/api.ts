@@ -1,11 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { ModelMode, Task, TaskListItem } from './types';
 
-const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL;
-if (!configuredApiUrl && process.env.NODE_ENV === 'production') {
-  throw new Error('NEXT_PUBLIC_API_URL must be set for production builds.');
+const configuredApiUrl = process.env.NEXT_PUBLIC_API_URL?.trim();
+if (process.env.NODE_ENV === 'production' && !configuredApiUrl) {
+  console.warn('NEXT_PUBLIC_API_URL is unset; defaulting to http://localhost:10000. Set it explicitly for production deployments.');
 }
-const BASE_URL = configuredApiUrl ?? 'http://localhost:10000';
+const BASE_URL = (configuredApiUrl || 'http://localhost:10000').replace(/\/$/, '');
 
 export class ApiError extends Error {
   constructor(

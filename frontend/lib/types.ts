@@ -1,4 +1,4 @@
-export const ACTIVE_STATUSES = ['queued', 'planning', 'searching', 'analyzing', 'verifying'] as const;
+﻿export const ACTIVE_STATUSES = ['queued', 'planning', 'searching', 'analyzing', 'verifying'] as const;
 export const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled'] as const;
 
 export type TaskStatus = (typeof ACTIVE_STATUSES)[number] | (typeof TERMINAL_STATUSES)[number];
@@ -26,6 +26,20 @@ export interface ResearchPlan {
   steps: string[];
 }
 
+export type LifecycleStage = 'understand' | 'plan' | 'execute' | 'observe' | 'verify' | 'deliver';
+
+export interface LifecycleState {
+  stage: LifecycleStage;
+  status: 'pending' | 'active' | 'done' | 'failed';
+  label: string;
+  detail?: string;
+}
+
+export interface ToolUsage {
+  name: string;
+  active: boolean;
+}
+
 export interface Task {
   id: string;
   prompt: string;
@@ -44,6 +58,9 @@ export interface Task {
   sources: SearchResult[];
   created_at: string;
   completed_at: string | null;
+  lifecycle?: LifecycleState[];
+  tools?: ToolUsage[];
+  artifact?: { type: string; title?: string; url?: string } | null;
 }
 
 export interface TaskListItem {

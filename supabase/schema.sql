@@ -25,6 +25,7 @@ create table if not exists public.tasks (
   sources jsonb not null default '[]'::jsonb,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
+  started_at timestamptz,
   completed_at timestamptz
 );
 
@@ -34,10 +35,18 @@ alter table public.tasks add column if not exists model_mode text default 'auto'
 alter table public.tasks add column if not exists model text;
 alter table public.tasks add column if not exists provider_used text;
 alter table public.tasks add column if not exists fallback_used boolean not null default false;
+alter table public.tasks add column if not exists started_at timestamptz;
+alter table public.tasks add column if not exists attempt_count integer not null default 0;
+alter table public.tasks add column if not exists last_error text;
+alter table public.tasks add column if not exists lease_owner text;
+alter table public.tasks add column if not exists lease_expires_at timestamptz;
+alter table public.tasks add column if not exists recovered_at timestamptz;
 
 create index if not exists tasks_user_created_idx on public.tasks(user_id, created_at desc);
 create index if not exists tasks_status_idx on public.tasks(status);
 create index if not exists tasks_user_status_idx on public.tasks(user_id, status);
+create index if not exists tasks_queue_claim_idx on public.tasks(status, lease_expires_at, created_at)
+  where status in ('queued','planning','searching','analyzing','verifying');
 
 alter table public.tasks enable row level security;
 
@@ -46,21 +55,9 @@ create policy "users can read own tasks"
   on public.tasks for select
   using (auth.uid() = user_id);
 
-drop policy if exists "users can insert own tasks" on public.tasks;
-create policy "users can insert own tasks"
-  on public.tasks for insert
-  with check (auth.uid() = user_id);
-
 drop policy if exists "users can update own tasks" on public.tasks;
-create policy "users can update own tasks"
-  on public.tasks for update
-  using (auth.uid() = user_id)
-  with check (auth.uid() = user_id);
-
 drop policy if exists "users can delete own tasks" on public.tasks;
-create policy "users can delete own tasks"
-  on public.tasks for delete
-  using (auth.uid() = user_id);
+drop policy if exists "users can insert own tasks" on public.tasks;
 
 create or replace function public.set_updated_at()
 returns trigger
@@ -179,3 +176,5 @@ revoke all on function public.decrement_usage(uuid, text) from public, anon, aut
 grant execute on function public.create_task(uuid, text, integer, integer, text, text) to service_role;
 grant execute on function public.increment_usage(uuid, text, integer) to service_role;
 grant execute on function public.decrement_usage(uuid, text) to service_role;
+
+-- For existing installations run migrations/003_durable_task_queue.sql.

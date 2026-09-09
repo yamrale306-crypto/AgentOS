@@ -1,0 +1,13 @@
+[package]
+name = "agentos"
+version = "1.0.0"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2" }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-deep-link = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-updater = "2"

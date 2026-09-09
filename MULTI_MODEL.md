@@ -27,12 +27,12 @@ Key facts:
 
 ## How model discovery works
 
-- A static catalog (`backend/src/ai/catalog.ts`) defines candidate models per provider
+- A static catalog (`packages/ai/src/catalog.ts`) defines candidate models per provider
   with capabilities (`tools`, `structuredOutput`, `vision`, `embeddings`), known
   context window, and a quality/speed/cost profile.
-- The registry (`backend/src/ai/registry.ts`) merges the catalog with dynamically
+- The registry (`packages/ai/src/registry.ts`) merges the catalog with dynamically
   discovered models, generates model keys (`<providerId>/<modelId>`), seeds tokens for
-  enabled providers, and exposes helper lookups (`byKey`, `ensureEnvModel`).
+  enabled providers, and exposes helper lookups (`get`, `byProvider`, `ensureEnvModel`).
 - Capabilities were **verified against the real APIs**, not invented. A model only
   advertises a capability it demonstrated (e.g. `vision` on the Gemini flash models
   was confirmed with live image input).
@@ -41,44 +41,42 @@ Key facts:
 
 ## How AUTO routing works
 
-Request flow: `chartWithFallback` / `structuredWithFallback`
-(`backend/src/agent/model.ts`) → router (`backend/src/ai/router.ts`).
+Request flow: `chatWithFallback` / `structuredWithFallback`
+(`packages/ai/src/complete.ts`) → router (`packages/ai/src/router.ts`).
 
-1. The stage is classified into a mode: `research`, `plan`, `verify`, `quality`,
-   `structured`, or `fast`.
+1. The stage is classified into a profile (`planning`, `research`, `analyzing`,
+   `verifying`, `synthesis`, or `general`).
 2. Every registered model is scored from:
-   - **capability match** — does it support the mode's needs (tools, structured
+   - **capability match** — does it support the stage's needs (tools, structured
      output, …)?
    - **health** — `healthy`/`degraded`/`offline` state from the health tracker;
-   - **latency EMA + failure EMA** — recent averaged latency and failures;
+   - **latency EMA** — recent averaged latency;
    - **profile fit** — `quality` / `balanced` / `fast` / `lowcost`;
    - **priority bonus** — configured model priority (0–100) adds a small bonus so a
-     preferred but slightly slower model can still win;
-   - **mock penalty** — mock/candidate models rank last.
-3. The top valid candidate is selected; `AI_DEFAULT_MODE` sets the default profile for
+     preferred but slightly slower model can still win.
+3. The top candidates are selected; `AI_DEFAULT_MODE` sets the default profile for
    tasks that do not specify one; `AI_ROUTING_ENABLED=true` (default) turns routing on.
 
 ## Token management
 
-`backend/src/ai/tokenManager.ts` keeps per-provider token state.
+`packages/ai/src/token-manager.ts` keeps per-provider token state.
 
 - Keys are **never returned to the client** — the dashboard shows only a masked
-  suffix (e.g. `…a1B2`).
+  form (e.g. `abc***Wxyz`).
 - Each token tracks consecutive failures, total failures/successes, last-used and
   last-failure timestamps, and the failure category.
-- On repeated hardware failure a token is put into a **cooldown**; providers with no
+- On repeated failure a token is put into an exponential **cooldown**; providers with no
   healthy tokens are marked offline and skipped entirely by the router.
-- Rotation picks the healthiest token for the provider on each call.
+- Rotation picks the healthiest, least-recently-used token for the provider on each call.
 - `MAX_MODEL_ATTEMPTS` (default 6) bounds how many models are tried before a task call
   gives up.
 
 ## Fallback behavior
 
-- Every call goes through a fallback chain: selected model from routing → the next
-  acceptable model from the router → the env overlay model → a guaranteed last-resort
-  default (local mock if no providers remain).
-- Failures only fall back when they are **retryable**; permanent failures
-  (`MODEL_UNAVAILABLE`, auth errors, invalid input) do not waste quota on a retry.
+- Every call goes through `chatWithFallback`, which routes an ordered candidate list and
+  iterates candidate × token until one succeeds or the attempt budget is exhausted.
+- Failures only advance to the next candidate when they are **retryable**; permanent
+  failures (`AUTH_ERROR`, invalid input) skip the offending token/model directly.
 - The result reports `fallback: true` and the provider/model that actually produced it,
   so the UI and task metadata show the real winner.
 - **Legacy mode** (`AI_ROUTING_ENABLED=false`): only `OPENROUTER_MODEL_PRIMARY` →
@@ -87,43 +85,44 @@ Request flow: `chartWithFallback` / `structuredWithFallback`
 
 ## Testing providers
 
-- `npm run verify:providers` in `backend/` calls each configured provider's real API
+- `pnpm verify:providers` at the repo root calls each configured provider's real API
   and reports `PASS` / `DEGRADED` / `FAIL` with the latency and model used. Pass
   `--include-dynamic` to also exercise dynamically discovered OpenRouter models.
 - The System dashboard shows a **Test** button per provider (section in dashboards);
   it returns the latency, the selected model, and a safe failure reason.
-- `npm run import:keys` imports credentials from a local key file into the backend
-  `.env` without printing the secrets.
+- `pnpm import:keys` imports credentials from a local key file into the backend
+  `.env` without printing the secrets. Pass `--file=<path>` to point at the file.
 
 ## Adding a new provider
 
-1. Add the env vars to `backend/src/lib/config.ts` (zod schema + `PROVIDER_KEY_VARS`).
-2. Implement a provider client in `backend/src/ai/providers.ts` (request builder +
-  error normalizer), surfacing the provider's own IDs for categories like
-  `RATE_LIMIT`, `AUTH_ERROR`, `MODEL_UNAVAILABLE`.
-3. Register the provider in the factory/registry so the engine can instantiate it.
-4. Add catalog entries with **verified** capabilities; run the provider probe and mark
-  down exactly what the real API supports.
-5. Mirror the provider in `backend/scripts/credentials.ts` (key import + format
-  validation) and `backend/scripts/verify-providers.ts`.
-6. Add tests to `backend/test/ai.test.ts` and re-run `npm run typecheck && npm test`.
+1. Add the env vars to `packages/config/src/env.ts` (zod schema + `PROVIDER_KEY_VARS`).
+2. Add the provider to `DEFAULT_PROVIDERS` in `packages/ai/src/catalog.ts` (base URL,
+   kind) and map its env keys in `packages/ai/src/providers.ts`
+   (`ProviderEnvInput` / `tokenByProvider`).
+3. Add catalog entries with **verified** capabilities; run the provider probe and mark
+   down exactly what the real API supports.
+4. Mirror the provider in `scripts/credentials.ts` (key import + format validation) and
+   `scripts/verify-providers.ts`.
+5. Add tests to `packages/ai/test/` and re-run `pnpm typecheck && pnpm lint && pnpm test`.
 
 ## Adding a new model
 
-Add an entry to `backend/src/ai/catalog.ts`:
+Add an entry to `packages/ai/src/catalog.ts`:
 
 ```ts
 {
-  id: 'gemini-3.7-flash',
   providerId: 'gemini',
+  modelId: 'gemini-3.7-flash',
   contextWindow: 1_048_576,
-  profile: { quality: 75, balanced: 85, fast: 85, lowcost: 70 },
+  qualityScore: 85,
+  speedScore: 80,
+  costPriority: 4,
   capabilities: { tools: true, structuredOutput: true, vision: true },
   priority: 0,
 }
 ```
 
-Then re-run the provider probe (`npm run verify:providers`) to confirm the ID and
+Then re-run the provider probe (`pnpm verify:providers`) to confirm the ID and
 capabilities against the real API before relying on it. Models that 404, are
 quota-blocked, or rate-limit are removed from the catalog rather than kept as dead
 weight.

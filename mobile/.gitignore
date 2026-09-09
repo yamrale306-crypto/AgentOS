@@ -1,0 +1,11 @@
+# Node
+node_modules/
+package-lock.json
+
+# Capacitor generated platforms (regenerate with `npm run sync` after `cap add ...`)
+android/
+ios/
+*.local.properties
+
+# Logs
+*.log

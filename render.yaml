@@ -2,10 +2,19 @@ services:
   - type: web
     name: agentos-backend
     runtime: node
-    rootDir: backend
-    buildCommand: npm install && npm run build
-    startCommand: npm start
+    rootDir: .
+    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @agentos/api... build
+    startCommand: pnpm --filter @agentos/api start
     healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+  - type: worker
+    name: agentos-worker
+    runtime: node
+    rootDir: .
+    buildCommand: pnpm install --frozen-lockfile && pnpm --filter @agentos/worker... build
+    startCommand: pnpm --filter @agentos/worker start
     envVars:
       - key: NODE_VERSION
         value: 20

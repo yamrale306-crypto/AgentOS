@@ -7,6 +7,8 @@ Autonomous web research agent: give it a goal, and it plans, searches the web, a
 - **Database** — Supabase (PostgreSQL + Auth)
 - **Models** — multi-provider AI engine with a smart model router, per-stage model selection, token rotation, health monitoring, and automatic fallback (OpenRouter, DeepSeek, Groq, Google Gemini, Z.ai, Cloudflare Workers AI)
 - **Search** — DuckDuckGo results provider with URL decoding and sanitization
+- **Runtime** — `@agentos/runtime`: a general-purpose agent runtime (run state machine, tool registry, policy engine, approval lifecycle, checkpoints, built-in agent policies, project scanner). Tool request gates the worker's `web_search` through the shared policy engine before it executes.
+- **Persistence** — every task runs through a durable `RunSession` backed by the agent runtime tables (runs, run_steps, tool_calls, checkpoints, approvals, agent_events). If a worker crashes, the queue requeues the task and the next worker **resumes from the latest checkpoint** — no re-planning from scratch.
 
 See [`MULTI_MODEL.md`](MULTI_MODEL.md) for the full AI provider/router documentation.
 
@@ -37,25 +39,31 @@ See [`MULTI_MODEL.md`](MULTI_MODEL.md) for the full AI provider/router documenta
 
 ### 1. Database
 
-Run `supabase/schema.sql` in the Supabase SQL editor.
-It is idempotent (safe to re-run) and creates the tables, indexes, RLS policies, and quota RPCs.
-Incremental delta scripts live in `supabase/migrations/`.
+For a new project run `supabase/schema.sql`, then every migration in order,
+including `supabase/migrations/003_durable_task_queue.sql` and
+`supabase/migrations/004_agent_runtime.sql`. Existing deployments must apply
+migration 003 before deploying the worker and 004 to add the agent runtime
+tables (agents, runs, run_steps, tool_calls, checkpoints, approvals,
+agent_events, projects). Browser roles have read-only RLS: creation and
+mutation exclusively run through the backend service role.
 
 ### 2. Backend
 
+pnpm + Turborepo monorepo rooted at the repo top level. Copy the root
+`.env.example` to `.env`, fill in real values, and install once:
+
 ```bash
-cd backend
-cp .env.example .env    # fill in real values
-npm install
-npm run dev             # http://localhost:10000
+pnpm install
+pnpm --filter @agentos/api dev      # http://localhost:10000
+pnpm --filter @agentos/worker dev   # durable PostgreSQL queue consumer (separate terminal)
 ```
 
 Test with the full stack locally (no real Supabase/OpenRouter/DuckDuckGo required — everything is mocked):
 
 ```bash
-npm test
-npm run typecheck
-npm run build
+pnpm test
+pnpm typecheck
+pnpm build
 ```
 
 ### 3. Frontend
@@ -96,6 +104,8 @@ Backend (`.env`):
 | `DAILY_SEARCH_LIMIT` | Daily search quota per user |
 | `MAX_ACTIVE_TASKS_PER_USER` | Max concurrently running tasks per user |
 | `MODEL_TIMEOUT_MS` | Model request timeout before fallback |
+| `WORKER_POLL_MS` / `WORKER_LEASE_SECONDS` / `WORKER_MAX_ATTEMPTS` | Worker polling, recovery lease, and retry cap |
+| `ADMIN_USER_IDS` / `ADMIN_EMAILS` | Server-side allowlists for `/api/system/*` |
 | `LOG_LEVEL` | `debug` \| `info` \| `warn` \| `error` |
 
 See [`MULTI_MODEL.md`](MULTI_MODEL.md) for how routing, token rotation, fallback and
@@ -117,14 +127,15 @@ Auth: `Authorization: Bearer <supabase-jwt>` (except `/health`).
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/health` | Liveness + DB connectivity |
+| `GET` | `/health` | Liveness (no dependency query) |
+| `GET` | `/ready` | Readiness (Supabase connectivity) |
 | `POST` | `/api/tasks` | Create a task (`{ prompt }`) → `202`; returns `{ id }` |
 | `GET` | `/api/tasks` | List the caller's tasks |
 | `GET` | `/api/tasks/:id` | Full task (plan, result, sources) |
 | `POST` | `/api/tasks/:id/cancel` | Request cancellation |
 | `POST` | `/api/tasks/:id/retry` | Re-run a failed task as a fresh run |
 | `DELETE` | `/api/tasks/:id` | Delete a finished task |
-| `GET` | `/api/system/status` | AI engine status (routing, models, providers) |
+| `GET` | `/api/system/status` | Admin-only AI engine status (routing, models, providers) |
 | `GET` | `/api/system/models` | Registered models with health/capabilities |
 | `GET` | `/api/system/providers` | Providers with token health (masked) |
 | `GET` | `/api/system/tokens` | Token diagnostics (masked, server state) |
@@ -137,10 +148,14 @@ Error codes: `UNAUTHORIZED` 401, `FORBIDDEN` 403, `NOT_FOUND` 404, `CONFLICT` 40
 
 ### Backend — Render
 
-Use `render.yaml` (Web Service rooted at `backend/`) or create a service manually:
+Use `render.yaml`. It creates a Web Service plus a Worker; both build from the
+repo root with pnpm (`pnpm --filter @agentos/api... build` / `--filter @agentos/worker... build`)
+and share the same environment variables. The API only persists queued work; the worker atomically
+claims it with PostgreSQL row locks and a lease. Expired leases are requeued up to
+`WORKER_MAX_ATTEMPTS`, then safely failed. Without a provisioned worker, tasks stay queued.
 
-- Build: `npm install && npm run build`
-- Start: `npm start`
+- Build: `pnpm install --frozen-lockfile && pnpm --filter @agentos/api... build`
+- Start: `pnpm --filter @agentos/api start`
 - Environment: everything from the backend table above; Render injects `PORT`.
 
 ### Frontend — Vercel
@@ -156,6 +171,21 @@ Import the repository and set the project root to `frontend`, then set the three
 - CORS is restricted to `FRONTEND_ORIGIN`; requests from other origins are rejected.
 - Request bodies are capped, and a global per-IP rate limiter protects the API.
 - Errors returned to clients never include stack traces or secrets.
+- `/api/system/*` requires a configured administrator ID or email; a frontend flag cannot grant access.
+
+### Release suite
+
+The non-mocked release suite targets a deployed staging environment and requires two
+separate Supabase test-user JWTs. It checks health/readiness, unauthenticated access,
+cross-user task isolation, durable task execution, cancellation, deletion, and history:
+
+```bash
+E2E_API_URL=https://staging-api.example.com E2E_USER_A_TOKEN=... E2E_USER_B_TOKEN=... pnpm --filter @agentos/api test:e2e
+```
+
+Run migration `003_durable_task_queue.sql` in staging first. GitHub Actions runs this
+suite only when manually dispatched, using `AGENTOS_E2E_API_URL`,
+`AGENTOS_E2E_USER_A_TOKEN`, and `AGENTOS_E2E_USER_B_TOKEN` repository secrets.
 
 ## Free-tier reality check
 

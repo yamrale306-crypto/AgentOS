@@ -3,7 +3,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "typecheck": "tsc --noEmit",
     "build": "next build",
+    "build:static": "node scripts/build-static.mjs",
     "start": "next start"
   },
   "dependencies": {
@@ -12,6 +14,9 @@
     "next": "^15.5.3",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"
+  },
+  "overrides": {
+    "postcss": "^8.5.28"
   },
   "devDependencies": {
     "@types/node": "^24.3.1",
